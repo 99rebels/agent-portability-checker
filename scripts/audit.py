@@ -49,10 +49,27 @@ def find_files(skill_dir, extensions=None):
     return found
 
 
+def find_script_files(skill_dir):
+    """Find script files only (.py, .sh, .js) — excludes docs and examples."""
+    return [f for f in find_files(skill_dir) if f.endswith(('.py', '.sh', '.js'))]
+
+
+def find_source_files(skill_dir):
+    """Find script files + SKILL.md — excludes references/ and example files."""
+    found = []
+    for f in find_files(skill_dir):
+        # Skip reference/example docs (they intentionally show bad patterns)
+        if '/references/' in f:
+            continue
+        if f.endswith(('.py', '.sh', '.js')) or f.endswith('SKILL.md'):
+            found.append(f)
+    return found
+
+
 def is_pattern_definition(content, pos):
     """Check if a match is inside a pattern string literal or fix function (not actual path usage)."""
     before = content[max(0, pos - 200):pos]
-    indicators = ['HARDCODED_PATH_PATTERNS', 'startswith(', '.replace(', 'r"']
+    indicators = ['HARDCODED_PATH_PATTERNS', 'cli_invocation_patterns', 'startswith(', '.replace(', 'r"']
     for ind in indicators:
         if ind in before[-100:]:
             return True
@@ -76,9 +93,11 @@ def rel_path(skill_dir, file_path):
 # --- Checks ---
 
 def check_hardcoded_paths(skill_dir, files):
-    """Find hardcoded platform-specific paths."""
+    """Find hardcoded platform-specific paths. Skips references/ docs."""
+    # Filter to source files only (skip reference/example docs)
+    source_files = [f for f in files if '/references/' not in f]
     issues = []
-    for fpath in files:
+    for fpath in source_files:
         content = read_file(fpath)
         if content is None:
             continue
@@ -130,7 +149,11 @@ def check_xdg_fallback(files):
 
 
 def check_platform_cli(skill_dir, files):
-    """Check for platform-specific CLI tool dependencies."""
+    """Check for platform-specific CLI tool dependencies.
+    
+    Only flags actual CLI invocations (subprocess, os.system, shell calls),
+    not string data keys, variable names, or regex pattern definitions.
+    """
     issues = []
     script_files = [f for f in files if f.endswith(('.py', '.sh', '.js'))]
     cli_invocation_patterns = [
@@ -150,6 +173,10 @@ def check_platform_cli(skill_dir, files):
             for i, line in enumerate(content.split('\n'), 1):
                 stripped = line.strip()
                 if stripped.startswith('#') or stripped.startswith('//'):
+                    continue
+                # Skip regex pattern definitions (r'..., r"...)
+                line_start = stripped[:50]
+                if line_start.startswith("r'") or line_start.startswith('r"'):
                     continue
                 if re.search(pattern, line):
                     if i in seen_lines:
