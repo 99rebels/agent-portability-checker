@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.1.2"
 
 # --- Patterns ---
 
@@ -49,25 +49,8 @@ def find_files(skill_dir, extensions=None):
     return found
 
 
-def find_script_files(skill_dir):
-    """Find script files only (.py, .sh, .js) — excludes docs and examples."""
-    return [f for f in find_files(skill_dir) if f.endswith(('.py', '.sh', '.js'))]
-
-
-def find_source_files(skill_dir):
-    """Find script files + SKILL.md — excludes references/ and example files."""
-    found = []
-    for f in find_files(skill_dir):
-        # Skip reference/example docs (they intentionally show bad patterns)
-        if '/references/' in f:
-            continue
-        if f.endswith(('.py', '.sh', '.js')) or f.endswith('SKILL.md'):
-            found.append(f)
-    return found
-
-
 def is_pattern_definition(content, pos):
-    """Check if a match is inside a pattern string literal or fix function (not actual path usage)."""
+    """Check if a match is inside a pattern string literal (not actual usage)."""
     before = content[max(0, pos - 200):pos]
     indicators = ['HARDCODED_PATH_PATTERNS', 'cli_invocation_patterns', 'startswith(', '.replace(', 'r"']
     for ind in indicators:
@@ -252,7 +235,11 @@ def check_headless_setup(skill_dir, files):
         if content is None:
             continue
         has_browser = any(kw in content for kw in ['run_local_server', 'webbrowser.open', 'open_browser'])
-        has_no_browser = '--no-browser' in content or 'no.browser' in content
+        # Check for --no-browser in actual code, not comments
+        has_no_browser = any(
+            '--no-browser' in line and not line.strip().startswith('#')
+            for line in content.split('\n')
+        ) or 'no.browser' in content
         if has_browser and not has_no_browser:
             issues.append({
                 "check": "headless_setup",
@@ -332,18 +319,21 @@ def run_audit(skill_dir):
     infos = sum(1 for i in all_issues if i.get("severity") == "info")
     auto_fixable = sum(1 for i in all_issues if i.get("auto_fixable"))
     manual = errors + warnings + infos - auto_fixable
-    passed = 8 - (1 if errors else 0) - (1 if warnings else 0) - (1 if infos else 0)
-    # More accurate: count distinct checks that passed
-    check_results = []
-    check_results.append(("hardcoded_paths", len(result["checks"]["hardcoded_paths"]) == 0))
-    check_results.append(("skill_data_dir", result["checks"]["skill_data_dir"]["has_support"] or len(result["checks"]["hardcoded_paths"]) == 0))
-    check_results.append(("xdg_fallback", result["checks"]["xdg_fallback"]["has_fallback"] or len(result["checks"]["hardcoded_paths"]) == 0))
-    check_results.append(("platform_cli", len(result["checks"]["platform_cli"]) == 0))
-    check_results.append(("user_agent", len(result["checks"]["user_agent"]) == 0))
-    check_results.append(("skill_md_paths", len(result["checks"]["skill_md_paths"]) == 0))
-    check_results.append(("headless_setup", len(result["checks"]["headless_setup"]) == 0))
-    check_results.append(("credential_env_vars", not result["checks"]["credential_env_vars"].get("needs_env_var")))
+
+    # Count distinct checks that passed
+    has_path_issues = len(result["checks"]["hardcoded_paths"]) > 0
+    check_results = [
+        ("hardcoded_paths", not has_path_issues),
+        ("skill_data_dir", result["checks"]["skill_data_dir"]["has_support"] or not has_path_issues),
+        ("xdg_fallback", result["checks"]["xdg_fallback"]["has_fallback"] or not has_path_issues),
+        ("platform_cli", len(result["checks"]["platform_cli"]) == 0),
+        ("user_agent", len(result["checks"]["user_agent"]) == 0),
+        ("skill_md_paths", len(result["checks"]["skill_md_paths"]) == 0),
+        ("headless_setup", len(result["checks"]["headless_setup"]) == 0),
+        ("credential_env_vars", not result["checks"]["credential_env_vars"].get("needs_env_var")),
+    ]
     passed = sum(1 for _, ok in check_results if ok)
+    cred_needs_env = result["checks"]["credential_env_vars"].get("needs_env_var")
 
     result["summary"] = {
         "passed": passed,
@@ -353,7 +343,7 @@ def run_audit(skill_dir):
         "infos": infos,
         "auto_fixable": auto_fixable,
         "manual": manual,
-        "is_portable": errors == 0 and warnings == 0 and infos == 0,
+        "is_portable": errors == 0 and warnings == 0 and infos == 0 and not cred_needs_env,
         "verdict": "fully_portable" if (errors == 0 and warnings == 0 and infos == 0)
                   else "portable_with_warnings" if errors == 0
                   else "not_portable",
@@ -488,7 +478,14 @@ def apply_fixes(result):
         new_ua = re.sub(r'openclaw[-_]', '', old_ua, flags=re.IGNORECASE)
         if new_ua != old_ua and old_ua in content:
             content = content.replace(old_ua, new_ua, 1)
-            changes.append({"file": item["file"], "old": old_ua.strip('"\''), "new": new_ua.strip('"\'')})
+            # Extract the UA value (after colon, between quotes)
+            old_display = re.search(r':\s*["\']([^"\']+)["\']', old_ua)
+            new_display = re.search(r':\s*["\']([^"\']+)["\']', new_ua)
+            changes.append({
+                "file": item["file"],
+                "old": old_display.group(1) if old_display else old_ua,
+                "new": new_display.group(1) if new_display else new_ua,
+            })
 
         with open(fpath, 'w') as f:
             f.write(content)
