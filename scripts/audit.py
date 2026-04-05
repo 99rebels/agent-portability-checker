@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 
 # --- Patterns ---
 
@@ -252,21 +252,30 @@ def check_headless_setup(skill_dir, files):
 
 
 def check_credential_env_var(files):
-    """Check if credentials support env var as alternative to file."""
+    """Check if credentials support env var as alternative to file.
+
+    Broad match: if a script has file-based credential loading AND any
+    os.environ.get/os.getenv calls with credential-related variable names,
+    consider env vars supported.
+    """
     script_files = [f for f in files if f.endswith(('.py', '.sh', '.js'))]
     has_file_creds = False
     has_env_var = False
+    cred_words = ['TOKEN', 'KEY', 'SECRET', 'API', 'PASSWORD', 'USERNAME', 'AUTH', 'CREDENTIAL']
     for fpath in script_files:
         content = read_file(fpath)
         if content is None:
             continue
-        for pattern in [r'os\.environ\.get\(["\']([A-Z_]*TOKEN[A-Z_]*)["\']',
-                        r'os\.environ\.get\(["\']([A-Z_]*KEY[A-Z_]*)["\']',
-                        r'os\.environ\.get\(["\']([A-Z_]*SECRET[A-Z_]*)["\']',
-                        r'os\.environ\.get\(["\']([A-Z_]*API[A-Z_]*)["\']']:
-            if re.search(pattern, content):
+        # Check for env var access with credential-related names
+        env_var_pattern = r'["\x27]([A-Z_]{3,}(?:' + '|'.join(cred_words) + r')[A-Z_]*)["\x27]'
+        for match in re.finditer(r'os\.environ\.get\(|os\.environ\[|os\.getenv\(', content):
+            after = content[match.start():match.start() + 200]
+            if re.search(env_var_pattern, after):
                 has_env_var = True
                 break
+        # Also check dotenv/load_dotenv patterns (common for env var loading)
+        if 'load_dotenv' in content or 'dotenv' in content:
+            has_env_var = True
         if 'CREDENTIALS_PATH' in content or 'CREDS_PATH' in content or 'credentials' in content.lower():
             has_file_creds = True
     return {
