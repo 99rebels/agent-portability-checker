@@ -57,15 +57,27 @@ python3 scripts/audit.py <skill_dir> --json   # structured output
 🔧 XDG Fallback: Missing ~/.config/ fallback path
 ```
 
+## Two-Phase Flow
+
+1. **Audit** — show all findings (auto-fixable + manual)
+2. **Fix** — apply auto-fixes, show brief "what changed" confirmation
+
+The agent reads the script output and formats it for the current channel. See `references/formatting.md` for Slack/WhatsApp/Discord styling.
+
 ## Auto-Fixes
 
 - Replaces `~/.<platform>/credentials/` with `$SKILL_DATA_DIR`
 - Replaces `~/.<platform>/workspace/data/<skill>/` with `$SKILL_DATA_DIR/<skill>/`
 - Strips platform names from User-Agent strings
+- Replaces hardcoded paths in SKILL.md with `<DATA_DIR>` placeholder
 
 ⚠ **Output styling is never modified.** Emojis, formatting, and visual elements in script output are preserved exactly as-is.
 
 Manual flags require human review (platform CLI deps, headless setup, env var alternatives).
+
+## Formatting
+
+Read `references/formatting.md` for channel-specific styling (Slack, WhatsApp, Discord, terminal).
 
 ## The Portability Pattern
 
